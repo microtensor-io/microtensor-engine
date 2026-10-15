@@ -53,4 +53,4 @@ The package installs as `microtensor_engine` so it can live beside `microtensor-
     pip install -e ".[dev]"
     ruff check . && mypy microtensor_engine && pytest -q
 
-Docs: https://www.microtensor.cloud/docs/api/enterprise/engine
+Docs: https://www.microtensor.cloud/docs/integrations/enterprise/engine

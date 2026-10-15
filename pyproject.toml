@@ -25,7 +25,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://www.microtensor.cloud"
-Documentation = "https://www.microtensor.cloud/docs/api/enterprise/engine"
+Documentation = "https://www.microtensor.cloud/docs/integrations/enterprise/engine"
 Repository = "https://github.com/microtensor-io/microtensor-engine"
 
 [tool.setuptools.packages.find]

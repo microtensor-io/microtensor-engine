@@ -9,6 +9,7 @@ The hosted API needs no SDK; any OpenAI client works. The Engine is the option f
     from microtensor import Engine
 
     Engine.frontier_models()   # live list of frontier models our inference miners serve
+    Engine.served_tasks()      # live list of tasks, their aliases and whether each is live
 
     engine = Engine.load(
         tasks=["text-to-sql", "classification", "extraction"],
@@ -25,7 +26,9 @@ The hosted API needs no SDK; any OpenAI client works. The Engine is the option f
 
 ## Behaviour
 
-- `tasks` maps each task to the current certified specialist in its arena. Users never see arenas, and get upgrades automatically when a better specialist is certified. A task the network does not serve yet raises `TaskUnavailable` at load time, naming what is served.
+- `tasks` are resolved against the live catalogue when the engine loads; the SDK holds no list of its own. A name can be a task id (`sql_generation`), its hyphenated form, a model id (`mt/sql_gen_s1`) or any alias the arena declares (`text-to-sql`, `sql`). New tasks and renamed aliases reach every installed SDK the moment the catalogue changes.
+- `Engine.served_tasks()` returns what the network serves right now: each task, its current specialist, its aliases and whether an operator is live. A task the network does not serve raises `TaskUnavailable` at load time, naming what is served.
+- Each task maps to the current certified specialist in its arena. Users never see arenas and get upgrades automatically when a better specialist is certified.
 - The certified router identifies the task for each request; `result.task` says which specialist answered. Pass `task=` to `run` to skip classification.
 - Escalation stays inside the Microtensor network, served by frontier models hosted by inference miners. `escalation_model` takes `"auto"`, a model id from `frontier_models()`, or a dict per task such as `{"text-to-sql": "deepseek-v4-pro", "classification": False}`.
 - With escalation off, with no frontier model served, or once the daily budget is used, answers below the floor come back with `below_floor=True` and the application decides.

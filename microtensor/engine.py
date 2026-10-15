@@ -12,13 +12,6 @@ DEFAULT_BASE_URL: Final[str] = "https://api.microtensor.cloud/v1"
 AUTO: Final[str] = "mt/auto"
 DEFAULT_FLOOR: Final[float] = 0.9
 TIMEOUT_SECONDS: Final[float] = 180.0
-TASK_NAMES: Final[dict[str, str]] = {
-    "text-to-sql": "sql_generation",
-    "sql": "sql_generation",
-    "sql_generation": "sql_generation",
-    "classification": "classification",
-    "extraction": "extraction",
-}
 NO_KEY: Final[str] = "set MICROTENSOR_API_KEY or pass api_key"
 LOCAL_PREVIEW: Final[str] = (
     "the local backend ships with the Enterprise preview; install microtensor-engine[local] "
@@ -32,6 +25,88 @@ class EngineError(RuntimeError):
 
 class TaskUnavailable(EngineError):
     pass
+
+
+def _normal(name: str) -> str:
+    return name.strip().lower().replace(" ", "-")
+
+
+@dataclass(frozen=True, slots=True)
+class Served:
+    task: str
+    model: str
+    title: str
+    aliases: tuple[str, ...]
+    live: bool
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        raw = [
+            self.task,
+            self.task.replace("_", "-"),
+            self.model,
+            self.model.removeprefix("mt/"),
+            *self.aliases,
+        ]
+        return tuple(dict.fromkeys(_normal(n) for n in raw if n))
+
+    @property
+    def label(self) -> str:
+        return self.aliases[0] if self.aliases else self.task
+
+
+@dataclass(frozen=True, slots=True)
+class Catalogue:
+    served: tuple[Served, ...]
+    frontier: tuple[str, ...]
+
+    @classmethod
+    def from_models(cls, models: Sequence[Mapping[str, Any]]) -> Catalogue:
+        entries = [dict(m) for m in models]
+        picked: dict[str, str] = {}
+        live: dict[str, bool] = {}
+        for entry in entries:
+            if entry.get("id") != AUTO:
+                continue
+            for item in entry.get("tasks") or []:
+                task = str(item.get("task", ""))
+                if task:
+                    picked[task] = str(item.get("model", ""))
+                    live[task] = bool(item.get("live", False))
+        for entry in entries:
+            task = str(entry.get("task", ""))
+            if task and entry.get("id") != AUTO and task not in picked:
+                picked[task] = str(entry.get("id", ""))
+                live[task] = bool((entry.get("capacity") or {}).get("live", False))
+        by_id = {str(e.get("id", "")): e for e in entries}
+        served = tuple(
+            Served(
+                task=task,
+                model=model,
+                title=str(by_id.get(model, {}).get("title", "")),
+                aliases=tuple(str(a) for a in by_id.get(model, {}).get("aliases") or []),
+                live=live.get(task, False),
+            )
+            for task, model in sorted(picked.items())
+        )
+        frontier = tuple(
+            str(e["id"]) for e in entries if e.get("kind") == "frontier" and e.get("id")
+        )
+        return cls(served=served, frontier=frontier)
+
+    def resolve(self, name: str) -> Served | None:
+        wanted = _normal(name)
+        for entry in self.served:
+            if wanted in entry.names:
+                return entry
+        return None
+
+    def describe(self) -> str:
+        parts = []
+        for entry in self.served:
+            extra = f" ({', '.join(entry.aliases)})" if entry.aliases else ""
+            parts.append(f"{entry.task}{extra}")
+        return ", ".join(parts) or "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,11 +142,6 @@ class Budget:
         if today != self.day:
             self.day = today
             self.spent = 0.0
-
-
-def task_id(name: str) -> str:
-    key = name.strip().lower().replace(" ", "-")
-    return TASK_NAMES.get(key, key.replace("-", "_"))
 
 
 def _messages(question: str, context: str) -> list[dict[str, str]]:
@@ -117,6 +187,9 @@ class Hosted:
         body = self._body(self._http.get("/models"))
         return [dict(m) for m in body.get("data", [])]
 
+    def catalogue(self) -> Catalogue:
+        return Catalogue.from_models(self.models())
+
     def chat(
         self, *, model: str, messages: Sequence[Mapping[str, str]], quality_floor: float
     ) -> dict[str, Any]:
@@ -129,21 +202,41 @@ class Hosted:
         return self._body(self._http.post("/chat/completions", json=payload))
 
 
+def _hosted(api_key: str | None, base_url: str, transport: httpx.BaseTransport | None) -> Hosted:
+    return Hosted(
+        api_key or os.environ.get("MICROTENSOR_API_KEY", ""), base_url, transport=transport
+    )
+
+
+def catalogue(
+    *,
+    api_key: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    transport: httpx.BaseTransport | None = None,
+) -> Catalogue:
+    hosted = _hosted(api_key, base_url, transport)
+    try:
+        return hosted.catalogue()
+    finally:
+        hosted.close()
+
+
+def served_tasks(
+    *,
+    api_key: str | None = None,
+    base_url: str = DEFAULT_BASE_URL,
+    transport: httpx.BaseTransport | None = None,
+) -> list[Served]:
+    return list(catalogue(api_key=api_key, base_url=base_url, transport=transport).served)
+
+
 def frontier_models(
     *,
     api_key: str | None = None,
     base_url: str = DEFAULT_BASE_URL,
     transport: httpx.BaseTransport | None = None,
 ) -> list[str]:
-    hosted = Hosted(
-        api_key or os.environ.get("MICROTENSOR_API_KEY", ""), base_url, transport=transport
-    )
-    try:
-        return [
-            str(m["id"]) for m in hosted.models() if m.get("kind") == "frontier" and m.get("id")
-        ]
-    finally:
-        hosted.close()
+    return list(catalogue(api_key=api_key, base_url=base_url, transport=transport).frontier)
 
 
 class Engine:
@@ -151,26 +244,32 @@ class Engine:
         self,
         *,
         hosted: Hosted,
+        catalogue: Catalogue,
         tasks: dict[str, str],
         quality_floor: float,
         escalation: bool,
         escalation_model: str | Mapping[str, Any],
         budget: Budget,
-        frontier: list[str],
     ) -> None:
         self._hosted = hosted
+        self._catalogue = catalogue
         self._tasks = tasks
         self.quality_floor = quality_floor
         self.escalation = escalation
         self._escalation_model = escalation_model
         self.budget = budget
-        self._frontier = frontier
 
     @staticmethod
     def frontier_models(
         *, api_key: str | None = None, base_url: str = DEFAULT_BASE_URL
     ) -> list[str]:
         return frontier_models(api_key=api_key, base_url=base_url)
+
+    @staticmethod
+    def served_tasks(
+        *, api_key: str | None = None, base_url: str = DEFAULT_BASE_URL
+    ) -> list[Served]:
+        return served_tasks(api_key=api_key, base_url=base_url)
 
     @classmethod
     def load(
@@ -189,39 +288,37 @@ class Engine:
     ) -> Engine:
         if backend != "hosted":
             raise EngineError(LOCAL_PREVIEW)
-        hosted = Hosted(
-            api_key or os.environ.get("MICROTENSOR_API_KEY", ""), base_url, transport=transport
-        )
-        served = {
-            str(m.get("task", "")): str(m.get("id", ""))
-            for m in hosted.models()
-            if m.get("task") and m.get("id") != AUTO
-        }
+        hosted = _hosted(api_key, base_url, transport)
+        found = hosted.catalogue()
         wanted: dict[str, str] = {}
         for name in tasks:
-            ident = task_id(name)
-            if ident not in served:
+            entry = found.resolve(name)
+            if entry is None:
                 hosted.close()
-                known = ", ".join(sorted(served)) or "none"
-                raise TaskUnavailable(f"{name!r} is not served yet; served tasks: {known}")
-            wanted[ident] = served[ident]
-        frontier = [str(m["id"]) for m in hosted.models() if m.get("kind") == "frontier"]
+                raise TaskUnavailable(
+                    f"{name!r} is not served yet; served tasks: {found.describe()}"
+                )
+            wanted[entry.task] = entry.model
         budget = Budget(
             usd_per_day=float((escalation_budget or {}).get("usd_per_day", 0) or 0) or None
         )
         return cls(
             hosted=hosted,
+            catalogue=found,
             tasks=wanted,
             quality_floor=quality_floor,
             escalation=escalation,
             escalation_model=escalation_model,
             budget=budget,
-            frontier=frontier,
         )
 
     @property
     def tasks(self) -> dict[str, str]:
         return dict(self._tasks)
+
+    @property
+    def catalogue(self) -> Catalogue:
+        return self._catalogue
 
     def close(self) -> None:
         self._hosted.close()
@@ -235,20 +332,26 @@ class Engine:
     def _escalation_for(self, task: str) -> str | None:
         chosen: Any = self._escalation_model
         if isinstance(chosen, Mapping):
-            chosen = chosen.get(task, chosen.get(task.replace("_", "-"), "auto"))
+            entry = self._catalogue.resolve(task)
+            names = entry.names if entry else (_normal(task),)
+            chosen = next((chosen[k] for k in chosen if _normal(str(k)) in names), "auto")
         if chosen is False or chosen is None:
             return None
+        frontier = self._catalogue.frontier
         if chosen == "auto":
-            return self._frontier[0] if self._frontier else None
+            return frontier[0] if frontier else None
         name = str(chosen)
-        if name not in self._frontier:
+        if name not in frontier:
             raise EngineError(f"{name!r} is not a frontier model the network serves")
         return name
 
     def run(self, question: str, *, context: str = "", task: str | None = None) -> Result:
-        model = AUTO if task is None else self._tasks.get(task_id(task), "")
-        if task is not None and not model:
-            raise TaskUnavailable(f"{task!r} was not loaded")
+        model = AUTO
+        if task is not None:
+            entry = self._catalogue.resolve(task)
+            model = self._tasks.get(entry.task, "") if entry else ""
+            if not model:
+                raise TaskUnavailable(f"{task!r} was not loaded; loaded: {self._loaded()}")
         messages = _messages(question, context)
         found = self._hosted.chat(model=model, messages=messages, quality_floor=self.quality_floor)
         result = self._result(found)
@@ -272,6 +375,9 @@ class Engine:
             request_id=escalated.request_id,
             raw=again,
         )
+
+    def _loaded(self) -> str:
+        return ", ".join(sorted(self._tasks)) or "none"
 
     def _result(self, found: dict[str, Any]) -> Result:
         choices = found.get("choices") or [{}]

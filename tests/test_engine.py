@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from microtensor import Engine, EngineError, TaskUnavailable, frontier_models
+from microtensor import Engine, EngineError, TaskUnavailable, frontier_models, served_tasks
 
 MODELS = {
     "data": [
@@ -13,7 +13,20 @@ MODELS = {
             "id": "mt/auto",
             "tasks": [{"task": "sql_generation", "model": "mt/sql_gen_s1", "live": True}],
         },
-        {"id": "mt/sql_gen_s1", "task": "sql_generation", "quality": 0.73},
+        {
+            "id": "mt/sql_gen_s1",
+            "task": "sql_generation",
+            "title": "SQL generation, season 1",
+            "aliases": ["text-to-sql", "sql"],
+            "quality": 0.73,
+            "capacity": {"operators": 2, "live": True},
+        },
+        {
+            "id": "mt/classify_s1",
+            "task": "classification",
+            "title": "Classification, season 1",
+            "capacity": {"operators": 0, "live": False},
+        },
     ]
 }
 
@@ -27,7 +40,7 @@ def gateway(request: httpx.Request) -> httpx.Response:
         200,
         json={
             "id": "cmpl_1",
-            "model": "mt/sql_gen_s1",
+            "model": body["model"],
             "choices": [{"message": {"content": "SELECT count(*) FROM orders"}}],
             "routing": {
                 "task": "sql_generation",
@@ -41,26 +54,42 @@ def gateway(request: httpx.Request) -> httpx.Response:
     )
 
 
-def test_hosted_engine_maps_tasks_and_reports_the_floor() -> None:
+def test_task_names_come_from_the_live_catalogue() -> None:
+    transport = httpx.MockTransport(gateway)
+    served = served_tasks(api_key="mt_sk_x", base_url="http://g/v1", transport=transport)
+    assert [s.task for s in served] == ["classification", "sql_generation"]
+    assert served[1].aliases == ("text-to-sql", "sql") and served[1].live
+    assert not served[0].live and served[0].label == "classification"
+
+    for name in ("text-to-sql", "SQL", "sql_generation", "sql-generation", "sql_gen_s1"):
+        engine = Engine.load([name], api_key="mt_sk_x", base_url="http://g/v1", transport=transport)
+        assert engine.tasks == {"sql_generation": "mt/sql_gen_s1"}
+        engine.close()
+
+    with pytest.raises(TaskUnavailable, match="text-to-sql"):
+        Engine.load(
+            ["summarisation"], api_key="mt_sk_x", base_url="http://g/v1", transport=transport
+        )
+    assert frontier_models(api_key="mt_sk_x", base_url="http://g/v1", transport=transport) == []
+
+
+def test_hosted_engine_reports_the_floor_and_pins_a_loaded_task() -> None:
     transport = httpx.MockTransport(gateway)
     engine = Engine.load(
         ["text-to-sql"], api_key="mt_sk_x", base_url="http://g/v1", transport=transport
     )
-    assert engine.tasks == {"sql_generation": "mt/sql_gen_s1"}
-
     sure = engine.run("How many orders in 2025?", context="CREATE TABLE orders(x)")
     assert sure.answer.startswith("SELECT") and sure.task == "sql_generation"
     assert sure.confidence == 0.96 and not sure.below_floor and not sure.escalated
 
     unsure = engine.run("How many orders?", context="CREATE TABLE orders(x)")
     assert unsure.below_floor and not unsure.escalated and unsure.escalated_to is None
-    engine.close()
 
+    pinned = engine.run("How many orders in 2025?", context="x", task="text-to-sql")
+    assert pinned.raw["model"] == "mt/sql_gen_s1"
     with pytest.raises(TaskUnavailable):
-        Engine.load(
-            ["classification"], api_key="mt_sk_x", base_url="http://g/v1", transport=transport
-        )
-    assert frontier_models(api_key="mt_sk_x", base_url="http://g/v1", transport=transport) == []
+        engine.run("Is this spam?", task="classification")
+    engine.close()
 
 
 def test_the_local_backend_is_named_as_a_preview_and_a_key_is_required() -> None:

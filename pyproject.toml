@@ -29,7 +29,7 @@ Documentation = "https://www.microtensor.cloud/docs/integrations/enterprise/engi
 Repository = "https://github.com/microtensor-io/microtensor-engine"
 
 [tool.setuptools.packages.find]
-include = ["microtensor_engine*"]
+include = ["microtensor*"]
 
 [tool.ruff]
 line-length = 100

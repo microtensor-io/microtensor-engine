@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from microtensor_engine import Engine, EngineError, TaskUnavailable, frontier_models
+from microtensor import Engine, EngineError, TaskUnavailable, frontier_models
 
 MODELS = {
     "data": [

@@ -1,4 +1,4 @@
-from microtensor_engine.engine import (
+from microtensor.engine import (
     Budget,
     Engine,
     EngineError,

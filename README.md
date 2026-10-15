@@ -6,7 +6,7 @@ The hosted API needs no SDK; any OpenAI client works. The Engine is the option f
 
 ## Interface
 
-    from microtensor_engine import Engine
+    from microtensor import Engine
 
     Engine.frontier_models()   # live list of frontier models our inference miners serve
 
@@ -46,11 +46,11 @@ Certified routers can be served with CUDA graphs and fused kernels for RMSNorm, 
 
 ## Import name
 
-The package installs as `microtensor_engine` so it can live beside `microtensor-subnet`, whose import name is `microtensor`. `from microtensor import Engine` becomes available once the customer package owns that name.
+The package installs as `microtensor`, the customer facing name. The network tooling installs as `microtensor_subnet` (distribution `microtensor-subnet`), so both can live in one environment.
 
 ## Development
 
     pip install -e ".[dev]"
-    ruff check . && mypy microtensor_engine && pytest -q
+    ruff check . && mypy microtensor && pytest -q
 
 Docs: https://www.microtensor.cloud/docs/integrations/enterprise/engine

@@ -2,21 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Final
+from typing import Any
 
 import httpx
 
-from microtensor.backends.hosted import Hosted, messages
-from microtensor.budget import Budget
-from microtensor.catalogue import Catalogue, Served, normal
-from microtensor.constants import AUTO, DEFAULT_BASE_URL, DEFAULT_FLOOR
-from microtensor.errors import EngineError, TaskUnavailable
-from microtensor.result import Result
-
-LOCAL_PREVIEW: Final[str] = (
-    "the local backend ships with the Enterprise preview; install microtensor-engine[local] "
-    "with a licence token, or use backend='hosted'"
-)
+from microtensor.backends import Backend, Hosted
+from microtensor.backends import local as local_backend
+from microtensor.backends.hosted import messages
+from microtensor.catalogue import Catalogue, Served
+from microtensor.core.constants import AUTO, DEFAULT_BASE_URL, DEFAULT_FLOOR
+from microtensor.core.errors import TaskUnavailable
+from microtensor.core.result import Result
+from microtensor.escalation import Budget, choose
 
 
 def catalogue(
@@ -54,7 +51,7 @@ class Engine:
     def __init__(
         self,
         *,
-        hosted: Hosted,
+        backend: Backend,
         catalogue: Catalogue,
         tasks: dict[str, str],
         quality_floor: float,
@@ -62,7 +59,7 @@ class Engine:
         escalation_model: str | Mapping[str, Any],
         budget: Budget,
     ) -> None:
-        self._hosted = hosted
+        self._backend = backend
         self._catalogue = catalogue
         self._tasks = tasks
         self.quality_floor = quality_floor
@@ -98,7 +95,7 @@ class Engine:
         transport: httpx.BaseTransport | None = None,
     ) -> Engine:
         if backend != "hosted":
-            raise EngineError(LOCAL_PREVIEW)
+            local_backend.connect(device=device)
         hosted = Hosted.connect(api_key, base_url, transport)
         found = hosted.catalogue()
         wanted: dict[str, str] = {}
@@ -114,7 +111,7 @@ class Engine:
             usd_per_day=float((escalation_budget or {}).get("usd_per_day", 0) or 0) or None
         )
         return cls(
-            hosted=hosted,
+            backend=hosted,
             catalogue=found,
             tasks=wanted,
             quality_floor=quality_floor,
@@ -132,7 +129,7 @@ class Engine:
         return self._catalogue
 
     def close(self) -> None:
-        self._hosted.close()
+        self._backend.close()
 
     def __enter__(self) -> Engine:
         return self
@@ -144,15 +141,15 @@ class Engine:
         model = AUTO if task is None else self._model_for(task)
         sent = messages(question, context)
         result = Result.from_response(
-            self._hosted.chat(model=model, messages=sent, quality_floor=self.quality_floor)
+            self._backend.chat(model=model, messages=sent, quality_floor=self.quality_floor)
         )
         if not result.below_floor or not self.escalation:
             return result
-        target = self._escalation_for(result.task)
+        target = choose(self._escalation_model, task=result.task, catalogue=self._catalogue)
         if target is None or not self.budget.allows(0.0):
             return result
         escalated = Result.from_response(
-            self._hosted.chat(model=target, messages=sent, quality_floor=self.quality_floor)
+            self._backend.chat(model=target, messages=sent, quality_floor=self.quality_floor)
         )
         self.budget.charge(escalated.cost)
         return replace(escalated, task=result.task, escalated=True, escalated_to=target)
@@ -164,19 +161,3 @@ class Engine:
             loaded = ", ".join(sorted(self._tasks)) or "none"
             raise TaskUnavailable(f"{task!r} was not loaded; loaded: {loaded}")
         return model
-
-    def _escalation_for(self, task: str) -> str | None:
-        chosen: Any = self._escalation_model
-        if isinstance(chosen, Mapping):
-            entry = self._catalogue.resolve(task)
-            names = entry.names if entry else (normal(task),)
-            chosen = next((chosen[k] for k in chosen if normal(str(k)) in names), "auto")
-        if chosen is False or chosen is None:
-            return None
-        frontier = self._catalogue.frontier
-        if chosen == "auto":
-            return frontier[0] if frontier else None
-        name = str(chosen)
-        if name not in frontier:
-            raise EngineError(f"{name!r} is not a frontier model the network serves")
-        return name

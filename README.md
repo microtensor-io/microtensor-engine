@@ -51,6 +51,20 @@ Certified routers can be served with CUDA graphs and fused kernels for RMSNorm, 
 
 The package installs as `microtensor`, the customer facing name. The network tooling installs as `microtensor_subnet` (distribution `microtensor-subnet`), so both can live in one environment.
 
+## Layout
+
+| Module | Holds |
+|---|---|
+| `microtensor/engine.py` | `Engine`, plus `catalogue()`, `served_tasks()` and `frontier_models()` |
+| `microtensor/catalogue.py` | `Catalogue` and `Served`: the live task list and name resolution |
+| `microtensor/backends/hosted.py` | The hosted backend: the HTTP client for the API |
+| `microtensor/result.py` | `Result`, built from a chat completion |
+| `microtensor/budget.py` | `Budget`: the daily escalation allowance |
+| `microtensor/errors.py` | `EngineError` and `TaskUnavailable` |
+| `microtensor/constants.py` | Base URL, `mt/auto`, default floor and timeout |
+
+The local backend joins `backends/` with the Enterprise preview.
+
 ## Development
 
     pip install -e ".[dev]"

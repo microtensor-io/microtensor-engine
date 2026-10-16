@@ -7,18 +7,11 @@ from typing import Any, Final
 import httpx
 
 from microtensor.catalogue import Catalogue
-from microtensor.constants import TIMEOUT_SECONDS
-from microtensor.errors import EngineError
+from microtensor.core.constants import TIMEOUT_SECONDS
+from microtensor.core.errors import EngineError
 
 NO_KEY: Final[str] = "set MICROTENSOR_API_KEY or pass api_key"
-
-
-def messages(question: str, context: str) -> list[dict[str, str]]:
-    found: list[dict[str, str]] = []
-    if context.strip():
-        found.append({"role": "system", "content": context})
-    found.append({"role": "user", "content": question})
-    return found
+ENV_KEY: Final[str] = "MICROTENSOR_API_KEY"
 
 
 class Hosted:
@@ -41,9 +34,7 @@ class Hosted:
         base_url: str,
         transport: httpx.BaseTransport | None = None,
     ) -> Hosted:
-        return cls(
-            api_key or os.environ.get("MICROTENSOR_API_KEY", ""), base_url, transport=transport
-        )
+        return cls(api_key or os.environ.get(ENV_KEY, ""), base_url, transport=transport)
 
     def close(self) -> None:
         self._http.close()

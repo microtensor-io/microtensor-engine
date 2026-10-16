@@ -53,17 +53,19 @@ The package installs as `microtensor`, the customer facing name. The network too
 
 ## Layout
 
-| Module | Holds |
-|---|---|
-| `microtensor/engine.py` | `Engine`, plus `catalogue()`, `served_tasks()` and `frontier_models()` |
-| `microtensor/catalogue.py` | `Catalogue` and `Served`: the live task list and name resolution |
-| `microtensor/backends/hosted.py` | The hosted backend: the HTTP client for the API |
-| `microtensor/result.py` | `Result`, built from a chat completion |
-| `microtensor/budget.py` | `Budget`: the daily escalation allowance |
-| `microtensor/errors.py` | `EngineError` and `TaskUnavailable` |
-| `microtensor/constants.py` | Base URL, `mt/auto`, default floor and timeout |
-
-The local backend joins `backends/` with the Enterprise preview.
+    microtensor/
+      __init__.py          the public API
+      engine.py            Engine, plus catalogue(), served_tasks() and frontier_models()
+      core/                constants, errors and Result
+      catalogue/           Served and Catalogue: the live task list and name resolution
+      backends/
+        base.py            the Backend protocol every backend implements
+        hosted/            the hosted backend: the API client and message shaping
+        local/             the local backend; names the Enterprise preview until it ships
+      escalation/          Budget and the escalation policy
+    tests/
+      conftest.py          a fake gateway and the shared transports
+      catalogue/ backends/ engine/
 
 ## Development
 
